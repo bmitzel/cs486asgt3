@@ -15,7 +15,7 @@
  * Default constructor initializes the camera
  */
 Scene::Scene()
-    : camera(0.0f, 1.5f, 6.0f, 0.0f, 1.5f, 0.0f, 0.0f, 1.0f, 0.0f)
+    : camera(0.0f, 1.5f, 6.0f, 0.0f, 1.5f, 5.0f, 0.0f, 1.0f, 0.0f)
 {
     /* empty */
 } /* Default constructor */

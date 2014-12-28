@@ -1,21 +1,39 @@
 /* Programmer: Brian Mitzel
  * Email: bmitzel@csu.fullerton.edu
  * Course: CPSC 486
- * Assignment: 2 - Picking
- * Due Date: 9/29/2014
+ * Assignment: 3 - View Frustum Culling
+ * Due Date: 11/17/2014
  *
- * Filename: picking.cpp
+ * Filename: vfculling.cpp
  *
- * This program uses OpenGL to load and render 3 PLY models
- * in a scene containing a ground plane and sky box.
- * Clicking on any of the models toggles the drawing of its
- * bounding volume.
+ * This program implements view frustum culling, using a
+ * virtual trackball for the camera control and axis-
+ * aligned bounding boxes for collision detection.
  *
- * This program also supports shading using either the
- * fixed function OpenGL pipeline or (by default) a custom
- * Blinn-Phong shader program.
+ * Three models are rendered in a scene with a ground plane
+ * and a sky box.
+ *
+ * When the user clicks with the left mouse button on one
+ * of the rendered models, its bounding volume is drawn.
+ * Whenever a bounding volume (visible or no) is in contact
+ * with an edge of the view frustum or entirely outside of
+ * the view frustum, the corresponding model is culled (not
+ * drawn).
+ *
+ * The virtual trackball is activated by holding down the
+ * shift key along with the left mouse button. Then, drawing
+ * a path on the screen will rotate the camera in first-
+ * person perspective accordingly.
+ *
+ * The user is able to toggle the program's lighting
+ * between the custom GLSL shader program and the OpenGL
+ * fixed function pipeline. Also, the user can toggle on or
+ * off the drawing of all the bounding volumes at once.
+ *
+ * Press 'h' for help at any time.
  */
 
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
@@ -36,6 +54,7 @@
 
 #include "GLSLShader.h"
 #include "Scene.h"
+#include "Trackball.h"
 
 //
 // Preprocessor definitions
@@ -59,11 +78,14 @@ void initGL();
 
 /* User interface functions */
 void printHelpMessage();
+void calcWindowCoords(int mouseX, int mouseY, const GLint viewport[],
+        GLdouble& windowX, GLdouble& windowY);
 void pick(int mouseX, int mouseY);
 
 /* Drawing functions */
 void drawGroundPlane(Camera*);
 void drawSkyBox(Camera*);
+void drawBoundingBox(AxisAlignedBoundingBox* bv);
 void drawScene(Camera*);
 
 /* GLUT callback functions */
@@ -71,11 +93,11 @@ void displayCallback();
 void reshapeCallback(int width, int height);
 void keyboardCallback(unsigned char key, int x, int y);
 void mouseCallback(int button, int state, int x, int y);
+void motionCallback(int x, int y);
 void timerCallback(int x);
 
 /* Math functions */
-void vecCopy4f(float *dest, const float *src); /* from Professor Shafae */
-void matMultVec4f(float vout[4], const float v[4], float m[16]); /* from Professor Shafae */
+bool inFrustum(AxisAlignedBoundingBox* bv);
 void transformVecByModelView(float outVec[4], const float inVec[4]); /* from Professor Shafae */
 
 /* Debugging functions */
@@ -91,20 +113,23 @@ void msglVersion(); /* from Professor Shafae */
 static const char   windowTitle[]       = "Picking";    /* window title */
 
 /* Global variables */
-static int      windowInitialWidth;                     /* initial window width */
-static int      windowInitialHeight;                    /* initial window height */
-static int      windowWidth;                            /* current window width */
-static int      windowHeight;                           /* current window height */
-static bool     isFullScreen;                           /* window full screen flag */
-static bool     isDrawingBoundingVolumes;               /* drawing bounding volumes flag */
-static bool     isUsingGLSLShader;                      /* using GLSL shader program flag */
-static Scene    scene;                                  /* the scene to render */
+static int          windowInitialWidth;                 /* initial window width */
+static int          windowInitialHeight;                /* initial window height */
+static int          windowWidth;                        /* current window width */
+static int          windowHeight;                       /* current window height */
+static int          mouseX;                             /* the mouse's current x position value */
+static int          mouseY;                             /* the mouse's current y position value */
+static bool         isFullScreen;                       /* window full screen flag */
+static bool         isDrawingBoundingVolumes;           /* drawing bounding volumes flag */
+static bool         isUsingGLSLShader;                  /* using GLSL shader program flag */
+static Scene        scene;                              /* the scene to render */
+static Trackball    trackball;                          /* virtual trackball for camera control */
 
 /* GLSL shader program */
 GLSLProgram* shaderProgram;
 
 /* Shader program values */
-const float light0_world_pos[] = {0.0f, 14.5f, 0.0f, 1.0f}; /* light position in world space */
+const float light0_world_pos[] = {0.0f, 11.5f, 0.0f, 1.0f}; /* light position in world space */
 float light0_model_pos[4];                                  /* light position in modelview space */
 
 /* Shader program uniform variables */
@@ -270,6 +295,10 @@ void initProgram()
     ::isDrawingBoundingVolumes = false;
     ::isUsingGLSLShader = true;
 
+    /* Initialize the center and radius of the virtual trackball */
+    ::trackball.SetCenter(::windowWidth / 2, ::windowHeight / 2);
+    ::trackball.SetRadius(std::max(::windowWidth, ::windowHeight) / 2);
+
     /* Seed the random number generator for setting the
      * initial height and rotation of models in the scene */
     srand(time(NULL));
@@ -349,7 +378,9 @@ void initGL()
     glutDisplayFunc(displayCallback);
     glutReshapeFunc(reshapeCallback);
     glutKeyboardFunc(keyboardCallback);
+    glutMotionFunc(motionCallback);
     glutMouseFunc(mouseCallback);
+    glutPassiveMotionFunc(motionCallback);
     glutTimerFunc(16, timerCallback, 0);
 
     msglError();
@@ -409,10 +440,10 @@ void drawGroundPlane(Camera* camera)
     /* Draw the ground plane */
     glBegin(GL_QUADS);
     glNormal3f(  0.0f, 1.0f,   0.0f);
-    glVertex3f(-15.0f, 0.0f, -15.0f);
-    glVertex3f(-15.0f, 0.0f,  15.0f);
-    glVertex3f( 15.0f, 0.0f,  15.0f);
-    glVertex3f( 15.0f, 0.0f, -15.0f);
+    glVertex3f(-12.0f, 0.0f, -12.0f);
+    glVertex3f(-12.0f, 0.0f,  12.0f);
+    glVertex3f( 12.0f, 0.0f,  12.0f);
+    glVertex3f( 12.0f, 0.0f, -12.0f);
     glEnd();
 } /* drawGroundPlane() */
 
@@ -458,51 +489,93 @@ void drawSkyBox(Camera* camera)
     glBegin(GL_QUADS);
     /* Front sky */
     glNormal3f( -1.0f,  0.0f,   1.0f);
-    glVertex3f( 15.0f,  0.0f, -15.0f);
+    glVertex3f( 12.0f,  0.0f, -12.0f);
     glNormal3f( -1.0f, -1.0f,   1.0f);
-    glVertex3f( 15.0f, 15.0f, -15.0f);
+    glVertex3f( 12.0f, 12.0f, -12.0f);
     glNormal3f(  1.0f, -1.0f,   1.0f);
-    glVertex3f(-15.0f, 15.0f, -15.0f);
+    glVertex3f(-12.0f, 12.0f, -12.0f);
     glNormal3f(  1.0f,  0.0f,   1.0f);
-    glVertex3f(-15.0f,  0.0f, -15.0f);
+    glVertex3f(-12.0f,  0.0f, -12.0f);
     /* Rear sky */
     glNormal3f(  1.0f,  0.0f,  -1.0f);
-    glVertex3f(-15.0f,  0.0f,  15.0f);
+    glVertex3f(-12.0f,  0.0f,  12.0f);
     glNormal3f(  1.0f, -1.0f,  -1.0f);
-    glVertex3f(-15.0f, 15.0f,  15.0f);
+    glVertex3f(-12.0f, 12.0f,  12.0f);
     glNormal3f( -1.0f, -1.0f,  -1.0f);
-    glVertex3f( 15.0f, 15.0f,  15.0f);
+    glVertex3f( 12.0f, 12.0f,  12.0f);
     glNormal3f( -1.0f,  0.0f,  -1.0f);
-    glVertex3f( 15.0f,  0.0f,  15.0f);
+    glVertex3f( 12.0f,  0.0f,  12.0f);
     /* Left sky */
     glNormal3f(  1.0f,  0.0f,   1.0f);
-    glVertex3f(-15.0f,  0.0f, -15.0f);
+    glVertex3f(-12.0f,  0.0f, -12.0f);
     glNormal3f(  1.0f, -1.0f,   1.0f);
-    glVertex3f(-15.0f, 15.0f, -15.0f);
+    glVertex3f(-12.0f, 12.0f, -12.0f);
     glNormal3f(  1.0f, -1.0f,  -1.0f);
-    glVertex3f(-15.0f, 15.0f,  15.0f);
+    glVertex3f(-12.0f, 12.0f,  12.0f);
     glNormal3f(  1.0f,  0.0f,  -1.0f);
-    glVertex3f(-15.0f,  0.0f,  15.0f);
+    glVertex3f(-12.0f,  0.0f,  12.0f);
     /* Right sky */
     glNormal3f( -1.0f,  0.0f,  -1.0f);
-    glVertex3f( 15.0f,  0.0f,  15.0f);
+    glVertex3f( 12.0f,  0.0f,  12.0f);
     glNormal3f( -1.0f, -1.0f,  -1.0f);
-    glVertex3f( 15.0f, 15.0f,  15.0f);
+    glVertex3f( 12.0f, 12.0f,  12.0f);
     glNormal3f( -1.0f, -1.0f,   1.0f);
-    glVertex3f( 15.0f, 15.0f, -15.0f);
+    glVertex3f( 12.0f, 12.0f, -12.0f);
     glNormal3f( -1.0f,  0.0f,   1.0f);
-    glVertex3f( 15.0f,  0.0f, -15.0f);
+    glVertex3f( 12.0f,  0.0f, -12.0f);
     /* Top sky */
     glNormal3f( -1.0f, -1.0f,   1.0f);
-    glVertex3f( 15.0f, 15.0f, -15.0f);
+    glVertex3f( 12.0f, 12.0f, -12.0f);
     glNormal3f( -1.0f, -1.0f,  -1.0f);
-    glVertex3f( 15.0f, 15.0f,  15.0f);
+    glVertex3f( 12.0f, 12.0f,  12.0f);
     glNormal3f(  1.0f, -1.0f,  -1.0f);
-    glVertex3f(-15.0f, 15.0f,  15.0f);
+    glVertex3f(-12.0f, 12.0f,  12.0f);
     glNormal3f(  1.0f, -1.0f,   1.0f);
-    glVertex3f(-15.0f, 15.0f, -15.0f);
+    glVertex3f(-12.0f, 12.0f, -12.0f);
     glEnd();
 } /* drawSkyBox() */
+
+/**
+ * Draws a bounding box
+ * @param bv - The bounding box (volume) to draw
+ */
+void drawBoundingBox(AxisAlignedBoundingBox* bv)
+{
+    glColor4f(1.0f, 0.33f, 1.0f, 0.5f);
+
+    glBegin(GL_QUADS);
+    /* Front */
+    glVertex3f(bv->right, bv->top, bv->front);
+    glVertex3f(bv->left, bv->top, bv->front);
+    glVertex3f(bv->left, bv->bottom, bv->front);
+    glVertex3f(bv->right, bv->bottom, bv->front);
+    /* Back */
+    glVertex3f(bv->left, bv->top, bv->back);
+    glVertex3f(bv->right, bv->top, bv->back);
+    glVertex3f(bv->right, bv->bottom, bv->back);
+    glVertex3f(bv->left, bv->bottom, bv->back);
+    /* Left */
+    glVertex3f(bv->left, bv->top, bv->front);
+    glVertex3f(bv->left, bv->top, bv->back);
+    glVertex3f(bv->left, bv->bottom, bv->back);
+    glVertex3f(bv->left, bv->bottom, bv->front);
+    /* Right */
+    glVertex3f(bv->right, bv->top, bv->back);
+    glVertex3f(bv->right, bv->top, bv->front);
+    glVertex3f(bv->right, bv->bottom, bv->front);
+    glVertex3f(bv->right, bv->bottom, bv->back);
+    /* Top */
+    glVertex3f(bv->right, bv->top, bv->back);
+    glVertex3f(bv->left, bv->top, bv->back);
+    glVertex3f(bv->left, bv->top, bv->front);
+    glVertex3f(bv->right, bv->top, bv->front);
+    /* Bottom */
+    glVertex3f(bv->right, bv->bottom, bv->front);
+    glVertex3f(bv->left, bv->bottom, bv->front);
+    glVertex3f(bv->left, bv->bottom, bv->back);
+    glVertex3f(bv->right, bv->bottom, bv->back);
+    glEnd();
+} /* drawBoundingBox() */
 
 /**
  * Draws the PLY models in the scene
@@ -544,66 +617,104 @@ void drawScene(Camera* camera)
             glMaterialf (GL_FRONT, GL_SHININESS, mShininess * 128.0);
         }
 
-        /* Set the viewing matrix */
-        glLoadIdentity();
-        gluLookAt(camera->eyePosition.x, camera->eyePosition.y, camera->eyePosition.z,
-                  camera->refPoint.x   , camera->refPoint.y   , camera->refPoint.z   ,
-                  camera->upVector.x   , camera->upVector.y   , camera->upVector.z   );
-
         /* Get the face list */
         FaceList* faceList = (*itr)->GetFaceList();
 
         /* Translate, rotate, and scale the model */
+        glLoadIdentity();
         glTranslatef(faceList->center[0], faceList->center[1], faceList->center[2]);
         glRotatef((*itr)->GetRotation(), 0.0f, 1.0f, 0.0f);
         glScalef((*itr)->GetScaleFactor(), (*itr)->GetScaleFactor(), (*itr)->GetScaleFactor());
 
-        /* Draw the model */
-        glBegin(GL_TRIANGLES);
-        for (int i = 0; i < faceList->fc; i++)
+        /* Save the current transform matrix */
+        GLfloat transform[16];
+        glGetFloatv(GL_MODELVIEW_MATRIX, transform);
+
+        /* Set the viewing matrix and reapply the transform matrix */
+        glLoadIdentity();
+        gluLookAt(camera->eyePosition.x, camera->eyePosition.y, camera->eyePosition.z,
+                  camera->refPoint.x   , camera->refPoint.y   , camera->refPoint.z   ,
+                  camera->upVector.x   , camera->upVector.y   , camera->upVector.z   );
+        glMultMatrixf(transform);
+
+        /* Get the current modelview matrix */
+        GLfloat modelview[16];
+        glGetFloatv(GL_MODELVIEW_MATRIX, modelview);
+
+        /* Recalculate the model's bounding box */
+        AxisAlignedBoundingBox* boundingBox = (*itr)->GetBoundingBox();
+        boundingBox->Recalculate(faceList, modelview, transform);
+
+        /* Only draw the model and its bounding volume if the bounding volume is
+         * entirely contained within the view frustum
+         */
+        if (inFrustum(boundingBox))
         {
-            for (int j = 0; j < 3; j++)
+            /* Draw the model */
+            glBegin(GL_TRIANGLES);
+            for (int i = 0; i < faceList->fc; i++)
             {
-                glColor3dv(faceList->colors[faceList->faces[i][j]]);
-                glNormal3dv(faceList->v_normals[faceList->faces[i][j]]);
-                glVertex3dv(faceList->vertices[faceList->faces[i][j]]);
+                for (int j = 0; j < 3; j++)
+                {
+                    glColor3dv(faceList->colors[faceList->faces[i][j]]);
+                    glNormal3dv(faceList->v_normals[faceList->faces[i][j]]);
+                    glVertex3dv(faceList->vertices[faceList->faces[i][j]]);
+                }
             }
-        }
-        glEnd();
+            glEnd();
 
-        /* Draw the bounding volumes */
-        if ((*itr)->GetIsDrawingBoundingSphere())
-        {
-            /* Set the material properties for the bounding volumes */
-            if (::isUsingGLSLShader)
+            /* Draw the bounding volumes */
+            if ((*itr)->GetIsDrawingBoundingBox())
             {
-                float light0_color[] = {0.2f, 0.2f, 0.0f, 0.4f};
-                float specular[]     = {0.0f, 0.0f, 0.0f, 0.4f};
-                float diffuse[]      = {0.4f, 0.4f, 0.4f, 0.4f};
-                float ambient[]      = {0.2f, 0.2f, 0.2f, 0.4f};
-                float shininess[]    = {1.0f};
-                glUniform4fv(::uLight0_color, 1, light0_color);
-                glUniform4fv(::uAmbient     , 1, ambient     );
-                glUniform4fv(::uDiffuse     , 1, diffuse     );
-                glUniform4fv(::uSpecular    , 1, specular    );
-                glUniform1fv(::uShininess   , 1, shininess   );
+                /* Set the material properties for the bounding volumes */
+                if (::isUsingGLSLShader)
+                {
+                    float light0_color[] = {0.2f, 0.2f, 0.0f, 0.4f};
+                    float specular[]     = {0.0f, 0.0f, 0.0f, 0.4f};
+                    float diffuse[]      = {0.4f, 0.4f, 0.4f, 0.4f};
+                    float ambient[]      = {0.2f, 0.2f, 0.2f, 0.4f};
+                    float shininess[]    = {1.0f};
+                    glUniform4fv(::uLight0_color, 1, light0_color);
+                    glUniform4fv(::uAmbient     , 1, ambient     );
+                    glUniform4fv(::uDiffuse     , 1, diffuse     );
+                    glUniform4fv(::uSpecular    , 1, specular    );
+                    glUniform1fv(::uShininess   , 1, shininess   );
+                }
+
+                /* Enable transparency */
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glEnable(GL_COLOR_MATERIAL);
+                glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
+
+                /* Draw the box */
+                glPushMatrix();
+                glLoadIdentity();
+                drawBoundingBox(boundingBox);
+                glPopMatrix();
+
+                /* Disable transparency */
+                glDisable(GL_COLOR_MATERIAL);
+                glDisable(GL_BLEND);
             }
-            /* Enable transparency */
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glEnable(GL_COLOR_MATERIAL);
-            glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
-
-            /* Draw the sphere */
-            glColor4f(1.0f, 0.33f, 1.0f, 0.5f);
-            glutSolidSphere(faceList->radius, 32, 32);
-
-            /* Disable transparency */
-            glDisable(GL_COLOR_MATERIAL);
-            glDisable(GL_BLEND);
         }
     }
 } /* drawScene() */
+
+/**
+ * Calculates window coordinates from mouse coordinates
+ * @param mouseX - The x component of the mouse coordinates
+ * @param mouseY - The y component of the mouse coordinates
+ * @param viewport - The current window parameters
+ * @param windowX - The x component of the window coordinates
+ * @param windowY - The y component of the window coordinates
+ */
+void calcWindowCoords(int mouseX, int mouseY, const GLint viewport[],
+        GLdouble& windowX, GLdouble& windowY)
+{
+    windowX = mouseX;
+    windowY = viewport[3] - mouseY - 1;
+} /* calcWindowCoords() */
 
 /**
  * Tests for intersection with mouse click and scene objects
@@ -615,14 +726,25 @@ void pick(int mouseX, int mouseY)
     GLint viewport[4];
     GLdouble modelview[16];
     GLdouble projection[16];
-    GLdouble windowX = mouseX;
+    GLdouble windowX;
     GLdouble windowY;
+
+    /* Get the camera and the modelview matrix */
+    Camera* camera = ::scene.GetCamera();
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+
+    /* Set the viewing matrix */
+    glLoadIdentity();
+    gluLookAt(camera->eyePosition.x, camera->eyePosition.y, camera->eyePosition.z,
+              camera->refPoint.x   , camera->refPoint.y   , camera->refPoint.z   ,
+              camera->upVector.x   , camera->upVector.y   , camera->upVector.z   );
 
     /* Initialize matrices and window coordinates */
     glGetIntegerv(GL_VIEWPORT, viewport);
     glGetDoublev(GL_MODELVIEW_MATRIX, modelview);   // deprecated
     glGetDoublev(GL_PROJECTION_MATRIX, projection); // deprecated
-    windowY = viewport[3] - mouseY - 1;
+    calcWindowCoords(mouseX, mouseY, viewport, windowX, windowY);
 
     /* Find points on the front and back of the view frustum */
     GLdouble xx;
@@ -641,9 +763,11 @@ void pick(int mouseX, int mouseY)
         if ((*itr)->Intersects(ray))
         {
             puts("Intersect");
-            (*itr)->ToggleDrawingBoundingSphere();
+            (*itr)->ToggleDrawingBoundingBox();
         }
     }
+
+    glPopMatrix();
 } /* pick() */
 
 /**
@@ -666,6 +790,23 @@ void displayCallback()
     {
         transformVecByModelView(::light0_model_pos, ::light0_world_pos);
         glUniform4fv(::uLight0_position, 1, ::light0_model_pos);
+    }
+
+    /* Calculate the virtual trackball rotation */
+    if (trackball.GetState() == ON)
+    {
+        GLdouble winX;
+        GLdouble winY;
+        GLint viewport[4];
+
+        /* Update the trackball's first and second points */
+        trackball.SetPoint1(trackball.GetPoint2());
+        glGetIntegerv(GL_VIEWPORT, viewport);
+        calcWindowCoords(::mouseX, ::mouseY, viewport, winX, winY);
+        trackball.SetPoint2(winX, winY);
+
+        /* Calculate the trackball rotation and update the camera */
+        camera->Rotate(trackball.GetRotation());
     }
 
     /* Draw the ground plane and sky box */
@@ -707,6 +848,10 @@ void reshapeCallback(int width, int height)
         height = 1;
     }
 
+    /* Update the center and radius of the virtual trackball */
+    ::trackball.SetCenter(width / 2, height / 2);
+    ::trackball.SetRadius(std::max(width, height) / 2);
+
     /* Update the projection matrix */
     double ratio = static_cast<double>(width) / height;
     glMatrixMode(GL_PROJECTION);
@@ -742,7 +887,7 @@ void keyboardCallback(unsigned char key, int x, int y)
         printf("Drawing Bounding Volumes is %s\n", ::isDrawingBoundingVolumes ? "on" : "off");
         for (std::list<Model*>::const_iterator itr = models->begin(); itr != models->end(); itr++)
         {
-            (*itr)->SetIsDrawingBoundingSphere(::isDrawingBoundingVolumes);
+            (*itr)->SetIsDrawingBoundingBox(::isDrawingBoundingVolumes);
         }
         break;
 #ifdef FREEGLUT
@@ -826,12 +971,49 @@ void keyboardCallback(unsigned char key, int x, int y)
  */
 void mouseCallback(int button, int state, int x, int y)
 {
-    if (GLUT_LEFT_BUTTON == button && GLUT_DOWN == state)
+    if (GLUT_LEFT_BUTTON == button && GLUT_DOWN == state &&
+            (glutGetModifiers() & GLUT_ACTIVE_SHIFT))
+    {
+        /* Turn the trackball on */
+        ::trackball.SetState(ON);
+        fprintf(stderr, "Trackball is ON\n");
+
+        /* Set the trackball's first and second points for rotation calculations */
+        GLdouble winX;
+        GLdouble winY;
+        GLint viewport[4];
+        glGetIntegerv(GL_VIEWPORT, viewport);
+        calcWindowCoords(x, y, viewport, winX, winY);
+        trackball.SetPoint1(winX, winY);
+        trackball.SetPoint2(winX, winY);
+    }
+    else if (GLUT_LEFT_BUTTON == button && GLUT_DOWN == state)
     {
         printf("Mouse click at (%d, %d)\n", x, y);
         pick(x, y);
     }
+    else if (GLUT_LEFT_BUTTON == button && GLUT_UP == state)
+    {
+        /* Turn the trackball off */
+        if (ON == ::trackball.GetState())
+        {
+            ::trackball.SetState(OFF);
+            fprintf(stderr, "Trackball is OFF\n");
+        }
+    }
 } /* mouseCallback() */
+
+/**
+ * Handles mouse motion
+ * This is both the GLUT motion and passive motion callback function
+ * @param x - The x coordinate of the mouse position
+ * @param y - The y coordinate of the mouse position
+ */
+void motionCallback(int x, int y)
+{
+    ::mouseX = x;
+    ::mouseY = y;
+} /* motionCallback() */
 
 /**
  * Redraws the scene every 16ms
@@ -845,35 +1027,32 @@ void timerCallback(int x)
 } /* timerCallback() */
 
 /**
- * Copies a 4x4 matrix of floats into another 4x4 matrix of floats
- * from Professor Shafae
- * @param dest - The destination matrix to copy to
- * @param src - The source matrix to copy from
+ * Checks if an axis-aligned bounding box is contained entirely inside the view frustum
+ * @param bv - An axis-aligned bounding box
+ * @return - True if the axis-aligned bounding box is contained entirely inside the view frustum;
+ * otherwise, false
  */
-void vecCopy4f(float *dest, const float *src)
+bool inFrustum(AxisAlignedBoundingBox* bv)
 {
-    for(int i = 0; i < 4; i++)
-    {
-        dest[i] = src[i];
-    }
-} /* vecCopy4f() */
+    float minW;
+    float maxW;
+    float bottomLeftFrontCorner[] = {bv->left, bv->bottom, bv->front, 1.0f};
+    float topRightFrontCorner[] = {bv->right, bv->top, bv->front, 1.0f};
+    float minVector[4];
+    float maxVector[4];
+    GLfloat projection[16];
 
-/**
- * Multiplies a 4D vector by a 4x4 matrix of floats for performing transformations
- * from Professor Shafae
- * @param vout - The returned vector where the result of the computation is stored
- * @param v - The input vector to be multiplied
- * @param m - The input matrix to multiply by
- */
-void matMultVec4f(float vout[4], const float v[4], float m[16])
-{
-    float c[4];
-    vecCopy4f(c, v);
-    vout[0] = m[0] * c[0] + m[4] * c[1] + m[8]  * c[2] + m[12] * c[3];
-    vout[1] = m[1] * c[0] + m[5] * c[1] + m[9]  * c[2] + m[13] * c[3];
-    vout[2] = m[2] * c[0] + m[6] * c[1] + m[10] * c[2] + m[14] * c[3];
-    vout[3] = m[3] * c[0] + m[7] * c[1] + m[11] * c[2] + m[15] * c[3];
-} /* matMultVec4f() */
+    /* Get the current projection matrix and apply it to the corners of the bounding box */
+    glGetFloatv(GL_PROJECTION_MATRIX, projection);
+    matMultVec4f(minVector, bottomLeftFrontCorner, projection);
+    minW = minVector[3];
+    matMultVec4f(maxVector, topRightFrontCorner, projection);
+    maxW = maxVector[3];
+
+    return (-minW < minVector[0]) && (maxVector[0] < maxW) &&
+           (-minW < minVector[1]) && (maxVector[1] < maxW) &&
+           (-minW < minVector[2]) && (maxVector[2] < maxW);
+} /* inFrustum() */
 
 /**
  * Transforms a vector by the current modelview matrix

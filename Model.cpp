@@ -19,7 +19,7 @@
 Model::Model(const char* filename, const Point3& pos)
     : rotationSpeed(130.0f)
     , translationSpeed(2.5f)
-    , isDrawingBoundingSphere(false)
+    , isDrawingBoundingBox(false)
 {
     /* Load the PLY model and initialize its position */
     faceList = readPlyModel(filename);
@@ -63,6 +63,15 @@ void Model::Update()
 } /* Model::Update() */
 
 /**
+ * Returns the model's bounding box
+ * @return - The model's bounding box
+ */
+AxisAlignedBoundingBox* Model::GetBoundingBox()
+{
+    return &boundingBox;
+} /* Model::GetBoundingBox() */
+
+/**
  * Returns the model's rotation
  * return - The model's rotation
  */
@@ -90,65 +99,87 @@ double Model::GetScaledRadius() const
 } /* Model::GetScaledRadius() */
 
 /**
- * Returns true if the model should draw its bounding sphere
- * @return - True if the model should draw its bounding sphere
+ * Returns true if the model should draw its bounding box
+ * @return - True if the model should draw its bounding box
  */
-bool Model::GetIsDrawingBoundingSphere() const
+bool Model::GetIsDrawingBoundingBox() const
 {
-    return isDrawingBoundingSphere;
-} /* Model::GetIsDrawingBoundingSphere() */
+    return isDrawingBoundingBox;
+} /* Model::GetIsDrawingBoundingBox() */
 
 /**
- * Sets whether the model should draw its bounding sphere
- * @param flag - True if the model should draw its bounding sphere
+ * Sets whether the model should draw its bounding box
+ * @param flag - True if the model should draw its bounding box
  */
-void Model::SetIsDrawingBoundingSphere(bool flag)
+void Model::SetIsDrawingBoundingBox(bool flag)
 {
-    isDrawingBoundingSphere = flag;
-} /* Model::SetIsDrawingBoundingSphere() */
+    isDrawingBoundingBox = flag;
+} /* Model::SetIsDrawingBoundingBox() */
 
 /**
- * Toggles whether the model should draw its bounding sphere
+ * Toggles whether the model should draw its bounding box
  */
-void Model::ToggleDrawingBoundingSphere()
+void Model::ToggleDrawingBoundingBox()
 {
-    isDrawingBoundingSphere = !isDrawingBoundingSphere;
-} /* Model::ToggleDrawingBoundingSphere() */
+    isDrawingBoundingBox = !isDrawingBoundingBox;
+} /* Model::ToggleDrawingBoundingBox() */
 
 /**
  * Tests if a ray intersects the model's bounding volume
  * @param ray - The ray with which to test for intersection
- * @return - True if the ray intersects the model's bounding volume
+ * @return - True if the ray intersects the model's bounding volume;
+ * otherwise, false
  */
 bool Model::Intersects(const Ray& ray) const
 {
-    /* If the ray's origin is inside the bounding sphere, it intersects */
-    Vec3 l = Point3(faceList->center[0], faceList->center[1], faceList->center[2]) - ray.origin;
-    float lSquared = l.Length2();
-    float rSquared = scaledRadius * scaledRadius;
-    if (lSquared < rSquared)
+    /* Slabs method of ray/AABB intersect from Real-Time Rendering, 3rd edition */
+    Point3 center = boundingBox.GetCenter();
+    float tMin = -999999999.0;
+    float tMax = +999999999.0;
+    Vec3 v = center - ray.origin;
+    float p[] = {v.x, v.y, v.z};
+    float d[] = {ray.direction.x, ray.direction.y, ray.direction.z};
+    float halfLengths[] = {(boundingBox.right - boundingBox.left) / 2,
+            (boundingBox.top - boundingBox.bottom) / 2, (boundingBox.front - boundingBox.back) / 2};
+
+    for (int i = 0; i < 3; i++)
     {
-        return true;
+        float e = p[i];
+        float f = d[i];
+
+        if (fabs(f) > EPSILON)
+        {
+            float fInverse = 1 / f;
+            float t1 = (e + halfLengths[i]) * fInverse;
+            float t2 = (e - halfLengths[i]) * fInverse;
+
+            if (t1 > t2)
+            {
+                std::swap(t1, t2);
+            }
+
+            if (t1 > tMin)
+            {
+                tMin = t1;
+            }
+
+            if (t2 < tMax)
+            {
+                tMax = t2;
+            }
+
+            if (tMin > tMax || tMax < 0)
+            {
+                return false;
+            }
+        }
+        else if (-e - halfLengths[i] > 0 || -e + halfLengths[i] < 0)
+        {
+            return false;
+        }
+
     }
 
-    /* Find the scalar projection of l onto the ray's direction */
-    float s = dot(l, ray.direction);
-
-    /* If s < 0, the ray points away from the sphere */
-    if (s < 0.0f)
-    {
-        return false;
-    }
-
-    /* Find mSquared using the Pythagorean Theorem and check for intersection */
-    float sSquared = s * s;
-    float mSquared = lSquared - sSquared;
-    if (mSquared > rSquared)
-    {
-        return false;
-    }
-
-    /* The ray intersects */
     return true;
 } /* Model::Intersects() */
 

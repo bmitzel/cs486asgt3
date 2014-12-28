@@ -45,6 +45,7 @@ public:
     Point3(const Vec4& v);
 
     /* Member functions */
+    Point3 operator+(const Vec3& v) const;
     Vec3 operator-(const Point3& p) const;
 }; /* Point3 class */
 

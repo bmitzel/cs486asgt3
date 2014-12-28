@@ -24,10 +24,10 @@ endif
 
 TARGET = vfculling
 # C++ Files
-CXXFILES =   vfculling.cpp Camera.cpp Model.cpp PlyModel.cpp Point3.cpp Ray.cpp Scene.cpp Vec3.cpp Vec4.cpp VecMath.cpp
+CXXFILES =   vfculling.cpp AxisAlignedBoundingBox.cpp Camera.cpp Model.cpp PlyModel.cpp Point3.cpp Quaternion.cpp Ray.cpp Scene.cpp Trackball.cpp Vec3.cpp Vec4.cpp VecMath.cpp
 CFILES =  
 # Headers
-HEADERS =  Camera.h GLSLShader.h Model.h PlyModel.h Point3.h Ray.h Scene.h Vec3.h Vec4.h VecMath.h
+HEADERS =  AxisAlignedBoundingBox.h Camera.h FaceList.h GLSLShader.h Model.h PlyModel.h Point3.h Quaternion.h Ray.h Scene.h Trackball.h Vec3.h Vec4.h VecMath.h
 
 OBJECTS = $(CXXFILES:.cpp=.o) $(CFILES:.c=.o)
 

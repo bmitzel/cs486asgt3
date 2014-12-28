@@ -25,11 +25,21 @@ Point3::Point3(const Vec4& v)
 } /* Copy constructor with Vec4 */
 
 /**
+ * Returns the sum of this point and a vector
+ * @param v - The vector to add
+ * @return - The sum of this point and a vector
+ */
+Point3 Point3::operator+(const Vec3& v) const
+{
+    return Point3(x + v.x, y + v.y, z + v.z);
+} /* Point3::operator+() */
+
+/**
  * Returns the difference of this point minus another point as a 3D vector
  * @param p - A 3D point to subtract from this point
  * @return The difference of this point minus another point as a 3D vector
  */
 Vec3 Point3::operator-(const Point3& p) const
 {
-    return Vec3((x - p.x), (y - p.y), (z - p.z));
+    return Vec3(x - p.x, y - p.y, z - p.z);
 } /* operator-() */

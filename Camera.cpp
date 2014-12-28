@@ -4,7 +4,9 @@
  *
  * Filename: Camera.cpp
  *
- * ...
+ * A C++ module implementing a 3D camera class which is
+ * defined by an eye position, a reference (lookat) point,
+ * and an up vector.
  */
 
 #include "Camera.h"
@@ -28,5 +30,45 @@ Camera::Camera(float eyeX, float eyeY, float eyeZ,
     , refPoint(refX, refY, refZ)
     , upVector(upX, upY, upZ)
 {
-    /* empty */
+    upVector = upVector.Normalize();
 }/* Default constructor */
+
+/**
+ * Rotates the camera by a given quaternion
+ * @param rotation - The quaternion representing the axis and angle of rotation
+ */
+void Camera::Rotate(Quaternion rotation)
+{
+    /* Get the gaze vector and rotate it */
+    Vec3 gazeVector = (rotation * GetGazeVector()).Normalize();
+
+    /* Update the camera's reference point using the new gaze vector */
+    refPoint = eyePosition + gazeVector;
+
+    /* Get the right vector and rotate it with zero roll (zero y component) */
+    Vec3 rightVector = (rotation * GetRightVector());
+    rightVector.y = 0.0f;
+    rightVector = rightVector.Normalize();
+
+    /* Calculate the new up vector */
+    upVector = cross(rightVector, gazeVector).Normalize();
+} /* Camera::Rotate() */
+
+/**
+ * Returns the camera's gaze vector
+ * @return - The camera's gaze vector
+ */
+Vec3 Camera::GetGazeVector() const
+{
+    return Vec3(refPoint.x - eyePosition.x, refPoint.y - eyePosition.y,
+            refPoint.z - eyePosition.z).Normalize();
+} /* Camera::GetGazeVector() */
+
+/**
+ * Returns the camera's right vector
+ * @return - The camera's right vector
+ */
+Vec3 Camera::GetRightVector() const
+{
+    return cross(GetGazeVector(), upVector).Normalize();
+} /* Camera::GetRightVector() */
